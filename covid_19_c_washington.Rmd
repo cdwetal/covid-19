@@ -1,0 +1,163 @@
+---
+title: "COVID-19 Analysis"
+output: pdf_document
+date: "2024-06-14"
+author: "Christopher Washington"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+The COVID-19 pandemic is something that has affected nearly every person on earth, and in such a way that requires statistical analysis. We will see in this report how the total number of cases and deaths in the state of California have progressed over time, and provide a method for predicting future totals based on the number of days since the first occurrence of COVID-19 in California. 
+
+## Required R Libraries
+
+The following R libraries are required to run the R code contained in this document: 
+```{r load_libs, echo=TRUE, message=FALSE}
+library(tidyverse)
+library(knitr)
+library(lubridate)
+
+set.seed(10)
+``` 
+
+## Dataset
+The dataset that we will use for the following analysis is a dataset of time series data about the number of cases and deaths in each county of the United States of America.
+## Data Retrieval
+We will begin by loading the dataset:
+```{r load_data, message=FALSE}
+base_url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+cases = read_csv(paste(base_url, "time_series_covid19_confirmed_US.csv", sep=""))
+
+deaths = read_csv(paste(base_url, "time_series_covid19_deaths_US.csv", sep=""))
+```
+Before conducting our analysis, there are a number of preprocessing steps that we must do on this dataset. The following R code is responsible for pivoting the dataset so that each row corresponds to a specific date, as well as renaming columns for clarity and ease of use.
+```{r preprocess_data1, message=FALSE}
+cases = cases %>% 
+  pivot_longer(
+    cols = -(UID:Combined_Key), 
+    names_to = "date",
+    values_to = 'cases'
+  ) %>% select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_)) %>%
+  rename(county = Admin2) %>%
+  rename(state = Province_State)
+
+deaths = deaths %>% 
+  pivot_longer(
+    cols = -(UID:Population), 
+    names_to = "date",
+    values_to = 'deaths'
+  ) %>% select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_)) %>%
+  rename(county = Admin2) %>%
+  rename(state = Province_State) %>%
+  rename(population = Population)
+```
+We then join the cases and deaths data frames.
+```{r preprocess_data2, message=FALSE}
+totals = cases %>%
+  full_join(deaths) %>% 
+  select(county, state, date, cases, deaths, population)
+```
+The analysis that we will conduct is specifically related to the cases and deaths in the state of California, so we will retrieve the state totals for all states with the following R code
+```{r preprocess_data3, message=FALSE}
+totals = totals %>%
+  group_by(state, date) %>%
+  summarize(
+    cases = sum(cases), 
+    deaths = sum(deaths))
+```
+We will then filter out all states other that California.
+```{r preprocess_data4, message=FALSE}
+totals = totals %>% 
+  filter(state == 'California') %>%
+  filter(cases > 0)
+```
+Finally, we will add a column that represents the number of days since the first case occurred in California.
+```{r preprocess_data5, message=FALSE}
+totals = totals %>% 
+  group_by(state) %>% 
+  mutate(days_since_first_case = as.integer(date - min(date)))
+```
+After our pre-processing, the final date looks like the following.
+```{r show_data, message=FALSE}
+kable(head(totals))
+```
+
+## Model 1 Days Since First Case vs Cases in California
+
+The first model that we will consider is a linear model of the number of cases in California as a function of the number of days since the first case in California. We will use the following linear model.
+```{r model1_model, message=FALSE}
+model_cases = lm(
+  cases ~ days_since_first_case, 
+  data = totals
+)
+
+summary(model_cases)
+```
+We then append a column of predicted values to the dataset.
+```{r model1_pred, message=FALSE}
+totals = totals %>% 
+  mutate(pred_cases = predict(model_cases))
+```
+Finally, we have the following visualization of the actual data (in blue) and the predicted data (in red).
+```{r model1_vis, echo=FALSE}
+totals %>% 
+  ggplot() + 
+  geom_line(aes(
+    x = days_since_first_case,
+    y = cases
+  ), color = "blue") +
+  geom_line(aes(
+    x = days_since_first_case,
+    y = pred_cases
+  ), color = "red") +
+  labs(x = "Days Since First Case", y="Cases") +
+  ggtitle("Days Since First Case vs Cases in California") +
+  theme(axis.text.x = element_text(face = 'bold', size = 10),
+        axis.text.y = element_text(face = 'bold', size = 10))
+```
+
+## Model 2 Days Since First Case vs Deaths in California
+
+The second model that we will consider is a similar model, but regarding the deaths in California instead of the cases. The following R code prepares the linear model.
+```{r model2_pred, message=FALSE}
+model_deaths = lm(
+  deaths ~ days_since_first_case, 
+  data = totals
+)
+
+summary(model_deaths)
+
+totals = totals %>% 
+  mutate(pred_deaths = predict(model_deaths))
+```
+We then have the following visualization displaying the actual data (in blue) and the predicted data (in red).
+```{r model2_vis, echo=FALSE}
+totals %>% 
+  ggplot() + 
+  geom_line(aes(
+    x = days_since_first_case,
+    y = deaths
+  ), color = "blue") +
+  geom_line(aes(
+    x = days_since_first_case,
+    y = pred_deaths
+  ), color = "red") +
+  labs(x = "Days Since First Case", y="Deaths") +
+  ggtitle("Days Since First Case vs Deaths in California") +
+  theme(axis.text.x = element_text(face = 'bold', size = 10),
+        axis.text.y = element_text(face = 'bold', size = 10))
+```
+
+## Bias Identification
+There are a few immediate sources of bias in the dataset that need to be addressed. The first is the reporting of cases in each county. Since the dataset only contains cases of COVID-19 that have been confirmed by professional medical personel, the data almost certainly undercounts the real number of cases in each county. It is not farfetched to believe that there are numerous individuals in each county who contracted the illness, but never sought medical attention for it, thereby underrepresenting them in the dataset. Another source of bias in the dataset is the way that the number of deaths due to COVID-19 in each county has been computed. Throughout the duration of the pandemic there seemed to be many metrics for determining that the cause of an individual's death was COVID-19, and this can also vary from county to county. At this point, long after the fact, there is no solution to remedy these biases, but we should certainly be aware of them in our analysis.
+
+## Conclusion
+In this report we analyzed a dataset of time series data of COVID-19 cases and deaths in each county of the United States of America. In particular, we considered the total cases and deaths in the state of California. We built two linear models to predict the number of cases and deaths given the number of days since the first case appeared, and both models obtained a high $R^2$ value indicating the performance of the linear models is good. Finally, we have identified the biases present in the underlying dataset.
